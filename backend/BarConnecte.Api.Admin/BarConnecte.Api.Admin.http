@@ -1,0 +1,6 @@
+@BarConnecte.Api.Admin_HostAddress = http://localhost:5051
+
+GET {{BarConnecte.Api.Admin_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

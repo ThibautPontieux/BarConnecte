@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: barconnecte
+      POSTGRES_PASSWORD: barconnecte
+      POSTGRES_DB: barconnecte
+    ports:
+      - "5433:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  api-admin:
+    build:
+      context: .
+      dockerfile: BarConnecte.Api.Admin/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__Default=Host=host.docker.internal;Port=5433;Database=barconnecte;Username=barconnecte;Password=barconnecte
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      - db
+
+  api-public:
+    build:
+      context: .
+      dockerfile: BarConnecte.Api.Public/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__Default=Host=host.docker.internal;Port=5433;Database=barconnecte;Username=barconnecte;Password=barconnecte
+    ports:
+      - "8090:8080"
+      - "8091:8081"
+    depends_on:
+      - db
+
+volumes:
+  db_data:
