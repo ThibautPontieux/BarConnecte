@@ -12,7 +12,7 @@ services:
 
   api-admin:
     build:
-      context: .
+      context: ./backend
       dockerfile: BarConnecte.Api.Admin/Dockerfile
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
@@ -25,7 +25,7 @@ services:
 
   api-public:
     build:
-      context: .
+      context: ./backend
       dockerfile: BarConnecte.Api.Public/Dockerfile
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
@@ -36,5 +36,14 @@ services:
     depends_on:
       - db
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"  # Frontend sur port 3000
+    depends_on:
+      - api-admin
+      - api-public
 volumes:
   db_data:

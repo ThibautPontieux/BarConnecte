@@ -1,17 +1,28 @@
-# Étape 1 - build de l'app
-FROM node:20-alpine AS builder
+FROM node:18-alpine AS builder
+
 WORKDIR /app
 
+# Copier package.json et installer les dépendances
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
+# Copier le code source
 COPY . .
+
+# Build de production
 RUN npm run build
 
-# Étape 2 - serveur statique (nginx)
+# ===== Production stage =====
 FROM nginx:alpine
+
+# Copier les fichiers buildés
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copie config nginx custom si besoin
+# Copier la configuration nginx
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Exposer le port 80
 EXPOSE 80
+
+# Démarrer nginx
 CMD ["nginx", "-g", "daemon off;"]
