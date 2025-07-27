@@ -36,7 +36,7 @@ export enum DrinkCategory {
 
 // Mapping des catégories
 export const DRINK_CATEGORY_NAMES: Record<DrinkCategory, string> = {
-  [DrinkCategory.Bieres]: 'Bieres',
+  [DrinkCategory.Bieres]: 'Bires',
   [DrinkCategory.Spiritueux]: 'Spiritueux',
   [DrinkCategory.Cocktails]: 'Cocktails',
   [DrinkCategory.Vins]: 'Vins',

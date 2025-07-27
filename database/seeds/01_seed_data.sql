@@ -1,10 +1,20 @@
-INSERT INTO "Drinks" ("Name", "Quantity") VALUES
-('Coca-Cola', 2),
-('Bière', 12),
-('Jus d''orange', 2),
-('Eau', 5),
-('Thé glacé', 3),
-('Limonade', 4),
-('Vin rouge', 10),
-('Vin blanc', 8),
-('Champagne', 15);
+INSERT INTO "Drinks" ("Name", "Quantity", "Price", "Category", "Description")
+VALUES 
+('Coca-Cola', 2, 1.5, 6, 'Boisson gazeuse sucrée'),
+('Pepsi', 2, 1.5, 6, 'Boisson gazeuse sucrée'),
+('Sprite', 2, 1.5, 6, 'Boisson gazeuse citron-lime'),
+('Fanta', 2, 1.5, 6, 'Boisson gazeuse à l''orange'),
+('Eau minérale', 1, 1.0, 7, 'Eau embouteillée'),
+('Café', 1, 2.0, 5, 'Café noir chaud'),
+('Thé', 1, 2.0, 7, 'Thé chaud'),
+('Jus de pomme', 2, 2.0, 8, 'Jus de fruits frais'),
+('Jus de raisin', 2, 2.0, 8, 'Jus de fruits frais'),
+('Lait', 1, 1.0, 7, 'Lait entier frais'),
+('Bière', 5, 3.0, 0, 'Bière blonde'),
+('Vin rouge', 10, 5.0, 3, 'Vin rouge sec'),
+('Vin blanc', 10, 5.0, 3, 'Vin blanc sec'),
+('Champagne', 20, 10.0, 4, 'Champagne brut'),
+('Whisky', 15, 7.0, 1, 'Whisky écossais'),
+('Rhum', 15, 6.0, 1, 'Rhum blanc'),
+('Vodka', 15, 6.0, 1, 'Vodka pure'),
+('Gin', 15, 6.0, 1, 'Gin londonien');

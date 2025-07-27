@@ -1,4 +1,5 @@
 using BarConnecte.Core.Datas;
+using BarConnecte.Core.Dtos;
 using JetBrains.Annotations;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
@@ -8,7 +9,7 @@ namespace BarConnecte.Api.Admin.Endpoints;
 [PublicAPI]
 public static class GetDrink
 {
-    public static async Task<Results<Ok<GetDrinkResponse>, NotFound>> Map(
+    public static async Task<Results<Ok<ApiWrapper<GetDrinkResponse>>, NotFound>> Map(
         BarDbContext db, string drinkName)
     {
         var drink = await db.Drinks
@@ -21,7 +22,7 @@ public static class GetDrink
             return TypedResults.NotFound();
         }
 
-        return TypedResults.Ok(new GetDrinkResponse(drink));
+        return TypedResults.Ok(new ApiWrapper<GetDrinkResponse>(new GetDrinkResponse(drink)));
     }
     public record GetDrinkResponse(string Drink);
 }
