@@ -1,5 +1,5 @@
 import React from 'react';
-import { CartItem as CartItemType } from '../../../types';
+import type { CartItem as CartItemType } from '../../../types';
 import { QuantitySelector } from '../../ui/QuantitySelector';
 import { formatPrice } from '../../../utils/formatters';
 

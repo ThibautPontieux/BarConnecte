@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Clock } from 'lucide-react';
 import { useOrderStore } from '../../stores/useOrderStore';
 import { useProductStore } from '../../stores/useProductStore';
@@ -9,9 +9,15 @@ export const OrderManagement: React.FC = () => {
   const updateStock = useProductStore((state) => state.updateStock);
   const pendingOrders = getPendingOrders();
 
+  // Log des commandes pour debug
+  useEffect(() => {
+    console.log('📋 OrderManagement: Commandes en attente:', pendingOrders);
+  }, [pendingOrders]);
+
   const handleAcceptOrder = (orderId: number) => {
     const order = pendingOrders.find((o) => o.id === orderId);
     if (order) {
+      console.log('✅ Acceptation commande:', order);
       // Mettre à jour le stock
       order.items.forEach((item) => {
         updateStock(item.id, item.stock - item.quantity);
@@ -21,6 +27,7 @@ export const OrderManagement: React.FC = () => {
   };
 
   const handleRejectOrder = (orderId: number) => {
+    console.log('❌ Refus commande:', orderId);
     updateOrderStatus(orderId, 'rejected');
   };
 
@@ -37,7 +44,7 @@ export const OrderManagement: React.FC = () => {
           <p className="text-gray-500">Aucune commande en attente</p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 xl:gap-6">
           {pendingOrders.map((order) => (
             <OrderCard
               key={order.id}

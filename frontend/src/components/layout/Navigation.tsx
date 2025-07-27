@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Clock, Settings, LucideIcon } from 'lucide-react';
+import { Home, Clock, Settings, type LucideIcon } from 'lucide-react';
 import { useOrderStore } from '../../stores/useOrderStore';
 import { Badge } from '../ui/Badge';
 
@@ -55,10 +55,10 @@ export const Navigation: React.FC<NavigationProps> = ({
           >
             <Icon className="w-5 h-5 mx-auto mb-1" />
             <span className="text-xs">{label}</span>
-            {badge && badge > 0 && (
+            {badge !== undefined && badge >= 0 && (
               <Badge
                 variant="danger"
-                className="absolute top-1 right-1/3 w-4 h-4 flex items-center justify-center text-xs p-0"
+                className="absolute top-1 right-1/4 min-w-[16px] h-4 flex items-center justify-center text-xs px-1"
               >
                 {badge}
               </Badge>
