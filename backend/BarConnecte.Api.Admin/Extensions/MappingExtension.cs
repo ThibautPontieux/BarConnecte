@@ -16,4 +16,15 @@ public static class MappingExtension
         
         return group;
     }
+    
+    public static RouteGroupBuilder MapOrders(this RouteGroupBuilder group)
+    {
+        group.MapGet("/{status}", OrderManagementEndpoints.GetOrdersByStatus);
+        group.MapPost("/{id:int}/accept", OrderManagementEndpoints.AcceptOrder);
+        group.MapPost("/{id:int}/reject", OrderManagementEndpoints.RejectOrder);
+        group.MapPost("/{id:int}/ready", OrderManagementEndpoints.MarkOrderReady);
+        group.MapGet("/{id:int}/complete", OrderManagementEndpoints.CompleteOrder);
+        
+        return group;
+    }
 }

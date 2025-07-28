@@ -4,12 +4,12 @@ export interface ApiWrapper<T> {
   errorMessage?: string;
 }
 
-// Types pour les Drinks (selon tes nouvelles APIs)
+// === TYPES POUR LES DRINKS ===
 export interface Drink {
   id: number;
   name: string;
   quantity: number;
-  price: string;          // string selon ton API
+  price: number;          // number côté admin API
   category: DrinkCategory;
   description?: string;
 }
@@ -17,7 +17,7 @@ export interface Drink {
 export interface DrinkResponse {
   name: string;
   quantity: number;
-  price: string;          // string selon ton API
+  price: string;          // string côté public API
   category: DrinkCategory;
   description?: string;
 }
@@ -36,7 +36,7 @@ export enum DrinkCategory {
 
 // Mapping des catégories
 export const DRINK_CATEGORY_NAMES: Record<DrinkCategory, string> = {
-  [DrinkCategory.Bieres]: 'Bires',
+  [DrinkCategory.Bieres]: 'Bières',
   [DrinkCategory.Spiritueux]: 'Spiritueux',
   [DrinkCategory.Cocktails]: 'Cocktails',
   [DrinkCategory.Vins]: 'Vins',
@@ -47,7 +47,34 @@ export const DRINK_CATEGORY_NAMES: Record<DrinkCategory, string> = {
   [DrinkCategory.Jus]: 'Jus',
 };
 
-// Types pour les commandes
+// === TYPES POUR LES COMMANDES ===
+export interface OrderResponse {
+  id: number;
+  customerName: string;
+  status: string;
+  totalAmount: number;
+  createdAt: string;
+  items: OrderItemResponse[];
+}
+
+export interface OrderItemResponse {
+  drinkName: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+export interface CreateOrderRequest {
+  customerName: string;
+  items: CreateOrderItemRequest[];
+}
+
+export interface CreateOrderItemRequest {
+  drinkId: number;
+  quantity: number;
+}
+
+// === TYPES LEGACY (pour compatibilité) ===
 export interface OrderDrinkDto {
   name: string;
   quantity: number;
@@ -57,7 +84,7 @@ export interface OrderDto {
   drinks: OrderDrinkDto[];
 }
 
-// Types API responses
+// === TYPES API RESPONSES ===
 export interface GetMenuResponse {
   drinks: DrinkResponse[];
 }
@@ -66,11 +93,11 @@ export interface DrinkListApiWrapper extends ApiWrapper<Drink[]> {}
 export interface GetMenuResponseApiWrapper extends ApiWrapper<GetMenuResponse> {}
 export interface StringApiWrapper extends ApiWrapper<string> {}
 
-// Types pour les requêtes Admin
+// === TYPES POUR LES REQUÊTES ADMIN ===
 export interface CreateDrinkRequest {
   name: string;
   quantity: number;
-  price: string;          // string selon ton API
+  price: string;          // string selon l'API
   category: DrinkCategory;
   description?: string;
 }
@@ -78,10 +105,12 @@ export interface CreateDrinkRequest {
 export interface UpdateDrinkRequest {
   name?: string;
   quantity?: number;
-  price?: string;         // string selon ton API
+  price?: string;         // string selon l'API
+  category?: DrinkCategory;
+  description?: string;
 }
 
-// Types internes pour le frontend
+// === TYPES INTERNES FRONTEND ===
 export interface Product {
   id: number;
   name: string;

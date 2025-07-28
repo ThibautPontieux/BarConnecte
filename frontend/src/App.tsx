@@ -21,9 +21,14 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen flex flex-col md:flex-row">
+      {/* Navigation */}
       <Navigation currentView={currentView} onViewChange={setCurrentView} />
-      <div className="pb-16 md:pb-0">{renderCurrentView()}</div>
+      
+      {/* Contenu principal */}
+      <div className="flex-1 pb-16 md:pb-0">
+        {renderCurrentView()}
+      </div>
     </div>
   );
 };
