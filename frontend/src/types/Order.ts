@@ -8,9 +8,66 @@ export interface Order {
   id: number;
   items: CartItem[];
   total: number;
-  status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed'; // ✅ Nouveaux statuts
+  status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed';
   customerName: string;
   timestamp: Date;
+  isPartiallyModified?: boolean;
+  modificationReason?: string;
+  lastModifiedAt?: Date;
+}
+
+// === NOUVEAUX TYPES POUR LA VÉRIFICATION DE STOCK ===
+
+export interface StockCheckResult {
+  isFullyAvailable: boolean;
+  issues: StockIssue[];
+  checkedAt: Date;
+}
+
+export interface StockIssue {
+  drinkId: number;
+  drinkName: string;
+  requestedQuantity: number;
+  availableQuantity: number;
+  type: 'OutOfStock' | 'InsufficientStock';
+  missingQuantity: number;
+}
+
+// === TYPES POUR LES REQUÊTES D'ÉDITION ===
+
+export interface EditOrderRequest {
+  items: EditOrderItem[];
+  reason: string;
+}
+
+export interface EditOrderItem {
+  drinkId: number;
+  quantity: number;
+}
+
+export interface AcceptPartialOrderRequest {
+  itemsToRemove: number[];
+  reason: string;
+}
+
+export interface ModifyQuantitiesRequest {
+  quantityChanges: Record<number, number>;
+  reason: string;
+}
+
+// === TYPES POUR LES SUGGESTIONS D'ÉDITION ===
+
+export interface OrderEditSuggestions {
+  isFullyAvailable: boolean;
+  suggestions: EditSuggestion[];
+  currentTotal: number;
+  estimatedNewTotal: number;
+}
+
+export interface EditSuggestion {
+  description: string;
+  actionId: string;
+  type: 'remove' | 'reduce' | 'replace';
 }
 
 // Types pour les workflows de commandes
@@ -19,6 +76,9 @@ export interface OrderWorkflow {
   canReject: boolean;
   canMarkReady: boolean;
   canComplete: boolean;
+  canEdit: boolean;
+  canCheckStock: boolean;
+  canAcceptPartially: boolean;
 }
 
 // Fonction utilitaire pour déterminer les actions possibles selon le statut
@@ -30,6 +90,9 @@ export function getOrderWorkflow(status: Order['status']): OrderWorkflow {
         canReject: true,
         canMarkReady: false,
         canComplete: false,
+        canEdit: true,
+        canCheckStock: true,
+        canAcceptPartially: true,
       };
     case 'accepted':
       return {
@@ -37,6 +100,9 @@ export function getOrderWorkflow(status: Order['status']): OrderWorkflow {
         canReject: false,
         canMarkReady: true,
         canComplete: false,
+        canEdit: false,
+        canCheckStock: false,
+        canAcceptPartially: false,
       };
     case 'ready':
       return {
@@ -44,6 +110,9 @@ export function getOrderWorkflow(status: Order['status']): OrderWorkflow {
         canReject: false,
         canMarkReady: false,
         canComplete: true,
+        canEdit: false,
+        canCheckStock: false,
+        canAcceptPartially: false,
       };
     case 'rejected':
     case 'completed':
@@ -53,6 +122,10 @@ export function getOrderWorkflow(status: Order['status']): OrderWorkflow {
         canReject: false,
         canMarkReady: false,
         canComplete: false,
+        // Nouvelles actions
+        canEdit: false,
+        canCheckStock: false,
+        canAcceptPartially: false,
       };
   }
 }
@@ -66,6 +139,7 @@ export interface OrderStats {
   ready: number;
   completed: number;
 }
+
 export interface OrderStatus {
   pending: 'En attente';
   accepted: 'Acceptée';
@@ -89,3 +163,31 @@ export const ORDER_STATUS_COLORS = {
   ready: 'bg-green-100 text-green-800',
   completed: 'bg-gray-100 text-gray-800',
 } as const;
+
+// === UTILITAIRES POUR L'ÉDITION ===
+
+export function getStockIssueDisplayText(issue: StockIssue): string {
+  if (issue.type === 'OutOfStock') {
+    return `En rupture complète`;
+  } else {
+    return `Seulement ${issue.availableQuantity} sur ${issue.requestedQuantity} demandé(s)`;
+  }
+}
+
+export function getStockIssueColor(issue: StockIssue): string {
+  return issue.type === 'OutOfStock' 
+    ? 'bg-red-100 text-red-800 border-red-200'
+    : 'bg-orange-100 text-orange-800 border-orange-200';
+}
+
+export function calculateTotalAfterChanges(order: Order, quantityChanges: Record<number, number>): number {
+  return order.items.reduce((total, item) => {
+    const newQuantity = quantityChanges[item.id] ?? item.quantity;
+    if (newQuantity <= 0) return total; // Article retiré
+    return total + (item.price * newQuantity);
+  }, 0);
+}
+
+export function hasOrderBeenModified(order: Order): boolean {
+  return order.isPartiallyModified === true;
+}

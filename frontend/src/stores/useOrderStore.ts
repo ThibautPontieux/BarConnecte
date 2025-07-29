@@ -1,7 +1,15 @@
 import { create } from 'zustand';
-import type { Order, OrderStatus } from '../types';
+import type { 
+  Order, 
+  StockCheckResult, 
+  EditOrderRequest, 
+  AcceptPartialOrderRequest, 
+  ModifyQuantitiesRequest,
+  OrderEditSuggestions 
+} from '../types/Order';
 import { PublicApiService } from '../services/publicApi';
 import { AdminApiService } from '../services/adminApi';
+import { OrderEditingApiService } from '../services/orderEditingApi';
 import type { CreateOrderRequest, OrderResponse } from '../services/types';
 import { extractErrorMessage, getUserFriendlyMessage } from '../utils/errorHandling';
 
@@ -17,22 +25,45 @@ interface OrderStore {
   loading: boolean;
   error: string | null;
   
-  // Méthodes Client
+  // === NOUVEL ÉTAT POUR L'ÉDITION ===
+  stockCheckResults: Record<number, StockCheckResult>; // orderId -> StockCheckResult
+  editingSuggestions: Record<number, OrderEditSuggestions>; // orderId -> Suggestions
+  editingOrder: Order | null; // Commande en cours d'édition
+  stockCheckLoading: boolean;
+  editingLoading: boolean;
+  
+  // === MÉTHODES EXISTANTES ===
   addOrder: (order: Omit<Order, 'id' | 'timestamp'>) => Promise<string>;
   getOrderById: (orderId: number) => Promise<Order | null>;
-  
-  // Méthodes Barman/Admin - Nouvelles avec route générique
   fetchOrdersByStatus: (status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed') => Promise<void>;
   fetchAllOrders: () => Promise<void>;
   refreshOrdersData: () => Promise<void>;
-  
-  // Actions sur les commandes
   acceptOrder: (orderId: number) => Promise<void>;
   rejectOrder: (orderId: number) => Promise<void>;
   markOrderReady: (orderId: number) => Promise<void>;
   completeOrder: (orderId: number) => Promise<void>;
   
-  // Méthodes utilitaires
+  // === NOUVELLES MÉTHODES POUR L'ÉDITION ===
+  
+  // Vérification de stock
+  checkOrderStock: (orderId: number) => Promise<StockCheckResult>;
+  getStockCheckResult: (orderId: number) => StockCheckResult | null;
+  clearStockCheck: (orderId: number) => void;
+  
+  // Suggestions d'édition
+  getOrderEditSuggestions: (orderId: number) => Promise<OrderEditSuggestions>;
+  getSuggestions: (orderId: number) => OrderEditSuggestions | null;
+  
+  // Édition de commandes
+  editOrder: (orderId: number, editRequest: EditOrderRequest) => Promise<void>;
+  acceptPartialOrder: (orderId: number, acceptRequest: AcceptPartialOrderRequest) => Promise<void>;
+  modifyOrderQuantities: (orderId: number, modifyRequest: ModifyQuantitiesRequest) => Promise<void>;
+  getOrderDetails: (orderId: number) => Promise<Order>;
+  
+  // Gestion de l'état d'édition
+  setEditingOrder: (order: Order | null) => void;
+  
+  // Méthodes utilitaires existantes
   updateOrderStatus: (orderId: number, status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed') => void;
   getPendingOrders: () => Order[];
   getOrdersByStatus: (status: string) => Order[];
@@ -43,14 +74,6 @@ interface OrderStore {
 
 // Fonction utilitaire pour s'assurer que ordersByStatus est bien initialisé
 const ensureOrdersByStatusStructure = (ordersByStatus: any) => {
-  const defaultStructure = {
-    pending: [],
-    accepted: [],
-    rejected: [],
-    ready: [],
-    completed: [],
-  };
-
   return {
     pending: Array.isArray(ordersByStatus?.pending) ? ordersByStatus.pending : [],
     accepted: Array.isArray(ordersByStatus?.accepted) ? ordersByStatus.accepted : [],
@@ -123,8 +146,15 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
   },
   loading: false,
   error: null,
+  
+  // === NOUVEL ÉTAT POUR L'ÉDITION ===
+  stockCheckResults: {},
+  editingSuggestions: {},
+  editingOrder: null,
+  stockCheckLoading: false,
+  editingLoading: false,
 
-  // === MÉTHODES CLIENT ===
+  // === MÉTHODES EXISTANTES (inchangées) ===
   
   addOrder: async (orderData) => {
     set({ loading: true, error: null });
@@ -146,98 +176,57 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       const result = await PublicApiService.createOrder(createOrderRequest);
       console.log('✅ Réponse API:', result);
       
-      // Convertir la réponse vers le format local
-      const newOrder: Order = {
-        id: result.id,
-        items: orderData.items, // On garde les items du panier local
-        total: result.totalAmount,
-        status: result.status as 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed',
-        customerName: result.customerName,
-        timestamp: new Date(result.createdAt),
-      };
+      // Convertir et ajouter la commande au store
+      const newOrder = convertOrderResponse(result);
       
-      // Ajouter à la liste locale et dans le bon statut
-      set((state) => {
-        console.log('📝 Ajout commande à l\'état:', {
-          newOrderStatus: newOrder.status,
-          currentOrdersByStatus: state.ordersByStatus,
-          existingStatusArray: state.ordersByStatus[newOrder.status]
-        });
+      set(state => ({
+        orders: [...state.orders, newOrder],
+        ordersByStatus: {
+          ...state.ordersByStatus,
+          pending: [...state.ordersByStatus.pending, newOrder]
+        },
+        loading: false
+      }));
 
-        // Vérifier que le tableau pour ce statut existe
-        const currentStatusOrders = state.ordersByStatus[newOrder.status] || [];
-        
-        return {
-          orders: [...state.orders, newOrder],
-          ordersByStatus: {
-            ...state.ordersByStatus,
-            [newOrder.status]: [...currentStatusOrders, newOrder],
-          },
-          loading: false,
-        };
-      });
-      
-      return result.id.toString();
-      
+      return `Commande #${result.id} créée avec succès`;
     } catch (error) {
-      console.error('❌ Erreur création commande:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la création de la commande';
+      const errorMessage = extractErrorMessage(error);
+      console.error('❌ Erreur création commande:', errorMessage);
       set({ 
-        error: errorMessage,
+        error: getUserFriendlyMessage('CREATE_ORDER_ERROR', errorMessage), 
         loading: false 
       });
-      throw new Error(errorMessage);
+      throw error;
     }
   },
 
-  getOrderById: async (orderId: number) => {
+  getOrderById: async (orderId) => {
     try {
-      set({ loading: true, error: null });
-      console.log('🔍 Recherche commande:', orderId);
-      
-      const orderResponse = await PublicApiService.getOrderById(orderId);
-      console.log('📦 Commande trouvée:', orderResponse);
-      
-      const order = convertOrderResponse(orderResponse);
-      set({ loading: false });
-      return order;
-      
+      const response = await PublicApiService.getOrderById(orderId);
+      return convertOrderResponse(response);
     } catch (error) {
       console.error('❌ Erreur récupération commande:', error);
-      set({ 
-        error: error instanceof Error ? error.message : 'Erreur lors de la récupération de la commande',
-        loading: false 
-      });
       return null;
     }
   },
 
-  // === NOUVELLES MÉTHODES AVEC ROUTE GÉNÉRIQUE ===
-  
   fetchOrdersByStatus: async (status) => {
     set({ loading: true, error: null });
     try {
-      console.log(`📋 Récupération des commandes ${status}...`);
-      const orderResponses = await AdminApiService.getOrdersByStatus(status);
-      console.log(`📊 ${orderResponses.length} commandes ${status} reçues`);
+      const orders = await AdminApiService.getOrdersByStatus(status);
+      const convertedOrders = orders.map(convertOrderResponse);
       
-      // Convertir les OrderResponse vers Order local
-      const orders: Order[] = orderResponses.map((orderResponse, index) => 
-        convertOrderResponse(orderResponse, index)
-      );
-      
-      set((state) => ({
+      set(state => ({
         ordersByStatus: {
           ...state.ordersByStatus,
-          [status]: orders,
+          [status]: convertedOrders
         },
-        loading: false,
+        loading: false
       }));
-      
     } catch (error) {
-      console.error(`❌ Erreur récupération commandes ${status}:`, error);
+      const errorMessage = extractErrorMessage(error);
       set({ 
-        error: error instanceof Error ? error.message : `Erreur lors de la récupération des commandes ${status}`,
+        error: getUserFriendlyMessage('FETCH_ORDERS_ERROR', errorMessage), 
         loading: false 
       });
     }
@@ -246,47 +235,26 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
   fetchAllOrders: async () => {
     set({ loading: true, error: null });
     try {
-      console.log('📋 Récupération de toutes les commandes...');
+      const statuses = ['pending', 'accepted', 'rejected', 'ready', 'completed'] as const;
+      const promises = statuses.map(status => AdminApiService.getOrdersByStatus(status));
+      const results = await Promise.all(promises);
       
-      // Récupérer toutes les commandes par statut en parallèle
-      const [pending, accepted, ready, completed, rejected] = await Promise.all([
-        AdminApiService.getOrdersByStatus('pending'),
-        AdminApiService.getOrdersByStatus('accepted'),
-        AdminApiService.getOrdersByStatus('ready'),
-        AdminApiService.getOrdersByStatus('completed'),
-        AdminApiService.getOrdersByStatus('rejected'),
-      ]);
-
-      // Convertir toutes les réponses
-      const ordersByStatus = {
-        pending: pending.map((order, index) => convertOrderResponse(order, index)),
-        accepted: accepted.map((order, index) => convertOrderResponse(order, index + 1000)),
-        ready: ready.map((order, index) => convertOrderResponse(order, index + 2000)),
-        completed: completed.map((order, index) => convertOrderResponse(order, index + 3000)),
-        rejected: rejected.map((order, index) => convertOrderResponse(order, index + 4000)),
-      };
-
-      // Créer la liste plate pour compatibility
-      const allOrders = [
-        ...ordersByStatus.pending,
-        ...ordersByStatus.accepted,
-        ...ordersByStatus.ready,
-        ...ordersByStatus.completed,
-        ...ordersByStatus.rejected,
-      ];
-
-      console.log(`📊 Total commandes récupérées: ${allOrders.length}`);
+      const newOrdersByStatus = statuses.reduce((acc, status, index) => {
+        acc[status] = results[index].map(convertOrderResponse);
+        return acc;
+      }, {} as any);
+      
+      const allOrders = Object.values(newOrdersByStatus).flat();
       
       set({
         orders: allOrders,
-        ordersByStatus: ensureOrdersByStatusStructure(ordersByStatus),
-        loading: false,
+        ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+        loading: false
       });
-      
     } catch (error) {
-      console.error('❌ Erreur récupération toutes commandes:', error);
+      const errorMessage = extractErrorMessage(error);
       set({ 
-        error: error instanceof Error ? error.message : 'Erreur lors de la récupération des commandes',
+        error: getUserFriendlyMessage('FETCH_ORDERS_ERROR', errorMessage), 
         loading: false 
       });
     }
@@ -297,202 +265,376 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     await fetchAllOrders();
   },
 
-  // === ACTIONS SUR LES COMMANDES ===
+  acceptOrder: async (orderId) => {
+    set({ loading: true, error: null });
+    try {
+      await AdminApiService.acceptOrder(orderId);
+      
+      // Mettre à jour le statut local
+      set(state => {
+        const order = state.orders.find(o => o.id === orderId);
+        if (order) {
+          order.status = 'accepted';
+          
+          // Déplacer de pending vers accepted
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            pending: state.ordersByStatus.pending.filter(o => o.id !== orderId),
+            accepted: [...state.ordersByStatus.accepted, order]
+          };
+          
+          return {
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            loading: false
+          };
+        }
+        return { loading: false };
+      });
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('ACCEPT_ORDER_ERROR', errorMessage), 
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
+  rejectOrder: async (orderId) => {
+    set({ loading: true, error: null });
+    try {
+      await AdminApiService.rejectOrder(orderId);
+      
+      set(state => {
+        const order = state.orders.find(o => o.id === orderId);
+        if (order) {
+          order.status = 'rejected';
+          
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            pending: state.ordersByStatus.pending.filter(o => o.id !== orderId),
+            rejected: [...state.ordersByStatus.rejected, order]
+          };
+          
+          return {
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            loading: false
+          };
+        }
+        return { loading: false };
+      });
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('REJECT_ORDER_ERROR', errorMessage), 
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
+  markOrderReady: async (orderId) => {
+    set({ loading: true, error: null });
+    try {
+      await AdminApiService.markOrderReady(orderId);
+      
+      set(state => {
+        const order = state.orders.find(o => o.id === orderId);
+        if (order) {
+          order.status = 'ready';
+          
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            accepted: state.ordersByStatus.accepted.filter(o => o.id !== orderId),
+            ready: [...state.ordersByStatus.ready, order]
+          };
+          
+          return {
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            loading: false
+          };
+        }
+        return { loading: false };
+      });
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('MARK_READY_ERROR', errorMessage), 
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
+  completeOrder: async (orderId) => {
+    set({ loading: true, error: null });
+    try {
+      await AdminApiService.completeOrder(orderId);
+      
+      set(state => {
+        const order = state.orders.find(o => o.id === orderId);
+        if (order) {
+          order.status = 'completed';
+          
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            ready: state.ordersByStatus.ready.filter(o => o.id !== orderId),
+            completed: [...state.ordersByStatus.completed, order]
+          };
+          
+          return {
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            loading: false
+          };
+        }
+        return { loading: false };
+      });
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('COMPLETE_ORDER_ERROR', errorMessage), 
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
+  // === NOUVELLES MÉTHODES POUR L'ÉDITION ===
+
+  checkOrderStock: async (orderId) => {
+    set({ stockCheckLoading: true, error: null });
+    try {
+      console.log('🔍 Vérification stock commande:', orderId);
+      const stockCheck = await OrderEditingApiService.checkOrderStock(orderId);
+      
+      set(state => ({
+        stockCheckResults: {
+          ...state.stockCheckResults,
+          [orderId]: stockCheck
+        },
+        stockCheckLoading: false
+      }));
+      
+      return stockCheck;
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('STOCK_CHECK_ERROR', errorMessage), 
+        stockCheckLoading: false 
+      });
+      throw error;
+    }
+  },
+
+  getStockCheckResult: (orderId) => {
+    return get().stockCheckResults[orderId] || null;
+  },
+
+  clearStockCheck: (orderId) => {
+    set(state => {
+      const newResults = { ...state.stockCheckResults };
+      delete newResults[orderId];
+      return { stockCheckResults: newResults };
+    });
+  },
+
+  getOrderEditSuggestions: async (orderId) => {
+    set({ stockCheckLoading: true, error: null });
+    try {
+      console.log('💡 Récupération suggestions commande:', orderId);
+      const suggestions = await OrderEditingApiService.getOrderEditSuggestions(orderId);
+      
+      set(state => ({
+        editingSuggestions: {
+          ...state.editingSuggestions,
+          [orderId]: suggestions
+        },
+        stockCheckLoading: false
+      }));
+      
+      return suggestions;
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('SUGGESTIONS_ERROR', errorMessage), 
+        stockCheckLoading: false 
+      });
+      throw error;
+    }
+  },
+
+  getSuggestions: (orderId) => {
+    return get().editingSuggestions[orderId] || null;
+  },
+
+  editOrder: async (orderId, editRequest) => {
+    set({ editingLoading: true, error: null });
+    try {
+      console.log('✏️ Édition commande:', orderId, editRequest);
+      const updatedOrder = await OrderEditingApiService.editOrder(orderId, editRequest);
+      
+      // Mettre à jour la commande dans le store
+      set(state => {
+        const orderIndex = state.orders.findIndex(o => o.id === orderId);
+        if (orderIndex !== -1) {
+          const newOrders = [...state.orders];
+          newOrders[orderIndex] = updatedOrder;
+          
+          // Mettre à jour aussi dans ordersByStatus
+          const currentStatus = updatedOrder.status;
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            [currentStatus]: state.ordersByStatus[currentStatus].map(o => 
+              o.id === orderId ? updatedOrder : o
+            )
+          };
+          
+          return {
+            orders: newOrders,
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            editingLoading: false
+          };
+        }
+        return { editingLoading: false };
+      });
+      
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('EDIT_ORDER_ERROR', errorMessage), 
+        editingLoading: false 
+      });
+      throw error;
+    }
+  },
+
+  acceptPartialOrder: async (orderId, acceptRequest) => {
+    set({ editingLoading: true, error: null });
+    try {
+      console.log('✅🔪 Acceptation partielle commande:', orderId, acceptRequest);
+      const updatedOrder = await OrderEditingApiService.acceptPartialOrder(orderId, acceptRequest);
+      
+      // Mettre à jour et déplacer la commande vers "accepted"
+      set(state => {
+        const orderIndex = state.orders.findIndex(o => o.id === orderId);
+        if (orderIndex !== -1) {
+          const newOrders = [...state.orders];
+          newOrders[orderIndex] = { ...updatedOrder, status: 'accepted' };
+          
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            pending: state.ordersByStatus.pending.filter(o => o.id !== orderId),
+            accepted: [...state.ordersByStatus.accepted, newOrders[orderIndex]]
+          };
+          
+          return {
+            orders: newOrders,
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            editingLoading: false
+          };
+        }
+        return { editingLoading: false };
+      });
+      
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('PARTIAL_ACCEPT_ERROR', errorMessage), 
+        editingLoading: false 
+      });
+      throw error;
+    }
+  },
+
+  modifyOrderQuantities: async (orderId, modifyRequest) => {
+    set({ editingLoading: true, error: null });
+    try {
+      console.log('🔢 Modification quantités commande:', orderId, modifyRequest);
+      const updatedOrder = await OrderEditingApiService.modifyOrderQuantities(orderId, modifyRequest);
+      
+      // Mettre à jour la commande dans le store
+      set(state => {
+        const orderIndex = state.orders.findIndex(o => o.id === orderId);
+        if (orderIndex !== -1) {
+          const newOrders = [...state.orders];
+          newOrders[orderIndex] = updatedOrder;
+          
+          const currentStatus = updatedOrder.status;
+          const newOrdersByStatus = {
+            ...state.ordersByStatus,
+            [currentStatus]: state.ordersByStatus[currentStatus].map(o => 
+              o.id === orderId ? updatedOrder : o
+            )
+          };
+          
+          return {
+            orders: newOrders,
+            ordersByStatus: ensureOrdersByStatusStructure(newOrdersByStatus),
+            editingLoading: false
+          };
+        }
+        return { editingLoading: false };
+      });
+      
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('MODIFY_QUANTITIES_ERROR', errorMessage), 
+        editingLoading: false 
+      });
+      throw error;
+    }
+  },
+
+  getOrderDetails: async (orderId) => {
+    try {
+      console.log('📋 Récupération détails commande:', orderId);
+      return await OrderEditingApiService.getOrderDetails(orderId);
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      set({ 
+        error: getUserFriendlyMessage('GET_ORDER_DETAILS_ERROR', errorMessage)
+      });
+      throw error;
+    }
+  },
+
+  setEditingOrder: (order) => {
+    set({ editingOrder: order });
+  },
+
+  // === MÉTHODES UTILITAIRES EXISTANTES (inchangées) ===
   
-  acceptOrder: async (orderId: number) => {
-    set({ error: null }); // Reset de l'erreur précédente
-
-    try {
-      console.log('✅ Acceptation commande:', orderId);
-      const updatedOrder = await AdminApiService.acceptOrder(orderId);
-      
-      set((state) => {
-        // Assurer la structure et obtenir les listes
-        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
-        const pendingOrders = safeOrdersByStatus.pending.filter(order => order.id !== orderId);
-        const orderToMove = safeOrdersByStatus.pending.find(order => order.id === orderId);
-        
-        if (orderToMove) {
-          const updatedOrderLocal = { ...orderToMove, status: 'accepted' as const };
-          
-          return {
-            orders: state.orders.map(order => 
-              order.id === orderId ? updatedOrderLocal : order
-            ),
-            ordersByStatus: {
-              ...safeOrdersByStatus,
-              pending: pendingOrders,
-              accepted: [...safeOrdersByStatus.accepted, updatedOrderLocal],
-            },
-          };
-        }
-        
-        return state;
-      });
-      
-    } catch (error) {
-      console.error('❌ Erreur acceptation commande:', error);
-      const errorMessage = getUserFriendlyMessage(error);
-      set({ error: errorMessage });
-      
-      // Si c'est une erreur de stock, on peut proposer des actions spécifiques
-      if (errorMessage.toLowerCase().includes('stock')) {
-        // Optionnel: déclencher un refresh des produits pour voir les stocks actuels
-        console.log('🔄 Erreur de stock détectée, refresh recommandé');
+  updateOrderStatus: (orderId, status) => {
+    set(state => {
+      const order = state.orders.find(o => o.id === orderId);
+      if (order) {
+        order.status = status;
       }
-    }
+      return { orders: [...state.orders] };
+    });
   },
 
-  rejectOrder: async (orderId: number) => {
-    set({ error: null });
-    
-    try {
-      console.log('❌ Refus commande:', orderId);
-      const updatedOrder = await AdminApiService.rejectOrder(orderId);
-      
-      set((state) => {
-        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
-        const pendingOrders = safeOrdersByStatus.pending.filter(order => order.id !== orderId);
-        const orderToMove = safeOrdersByStatus.pending.find(order => order.id === orderId);
-        
-        if (orderToMove) {
-          const updatedOrderLocal = { ...orderToMove, status: 'rejected' as const };
-          
-          return {
-            orders: state.orders.map(order => 
-              order.id === orderId ? updatedOrderLocal : order
-            ),
-            ordersByStatus: {
-              ...safeOrdersByStatus,
-              pending: pendingOrders,
-              rejected: [...safeOrdersByStatus.rejected, updatedOrderLocal],
-            },
-          };
-        }
-        
-        return state;
-      });
-      
-    } catch (error) {
-      console.error('❌ Erreur refus commande:', error);
-      const errorMessage = getUserFriendlyMessage(error);
-      set({ error: errorMessage });
-    }
+  getPendingOrders: () => get().ordersByStatus.pending,
+  
+  getOrdersByStatus: (status) => {
+    const ordersByStatus = get().ordersByStatus;
+    return ordersByStatus[status as keyof typeof ordersByStatus] || [];
   },
 
-  markOrderReady: async (orderId: number) => {
-    set({ error: null });
-    
-    try {
-      console.log('📦 Commande prête:', orderId);
-      const updatedOrder = await AdminApiService.markOrderReady(orderId);
-      
-      set((state) => {
-        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
-        const acceptedOrders = safeOrdersByStatus.accepted.filter(order => order.id !== orderId);
-        const orderToMove = safeOrdersByStatus.accepted.find(order => order.id === orderId);
-        
-        if (orderToMove) {
-          const updatedOrderLocal = { ...orderToMove, status: 'ready' as const };
-          
-          return {
-            orders: state.orders.map(order => 
-              order.id === orderId ? updatedOrderLocal : order
-            ),
-            ordersByStatus: {
-              ...safeOrdersByStatus,
-              accepted: acceptedOrders,
-              ready: [...safeOrdersByStatus.ready, updatedOrderLocal],
-            },
-          };
-        }
-        
-        return state;
-      });
-      
-    } catch (error) {
-      console.error('❌ Erreur marquage prêt:', error);
-      const errorMessage = getUserFriendlyMessage(error);
-      set({ error: errorMessage });
-    }
-  },
-
-  completeOrder: async (orderId: number) => {
-    set({ error: null });
-    
-    try {
-      console.log('🏁 Finalisation commande:', orderId);
-      const updatedOrder = await AdminApiService.completeOrder(orderId);
-      
-      set((state) => {
-        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
-        const readyOrders = safeOrdersByStatus.ready.filter(order => order.id !== orderId);
-        const orderToMove = safeOrdersByStatus.ready.find(order => order.id === orderId);
-        
-        if (orderToMove) {
-          const updatedOrderLocal = { ...orderToMove, status: 'completed' as const };
-          
-          return {
-            orders: state.orders.map(order => 
-              order.id === orderId ? updatedOrderLocal : order
-            ),
-            ordersByStatus: {
-              ...safeOrdersByStatus,
-              ready: readyOrders,
-              completed: [...safeOrdersByStatus.completed, updatedOrderLocal],
-            },
-          };
-        }
-        
-        return state;
-      });
-      
-    } catch (error) {
-      console.error('❌ Erreur finalisation commande:', error);
-      const errorMessage = getUserFriendlyMessage(error);
-      set({ error: errorMessage });
-    }
-  },
-
-  // === MÉTHODES UTILITAIRES ===
-
-  // Nettoyer les erreurs
-  clearError: () => {
-    set({ error: null });
-  },
-
-  updateOrderStatus: (orderId, status) =>
-    set((state) => ({
-      orders: state.orders.map((order) =>
-        order.id === orderId ? { ...order, status } : order
-      ),
-    })),
-
-  getPendingOrders: () => {
-    const { ordersByStatus } = get();
-    return ordersByStatus.pending;
-  },
-
-  getOrdersByStatus: (status: string) => {
-    const { ordersByStatus } = get();
-    const safeOrdersByStatus = ensureOrdersByStatusStructure(ordersByStatus);
-    return safeOrdersByStatus[status as keyof typeof safeOrdersByStatus] || [];
-  },
-
-  getAllOrdersFlat: () => {
-    const { orders } = get();
-    return orders;
-  },
+  getAllOrdersFlat: () => get().orders,
 
   getOrdersStats: () => {
     const { ordersByStatus } = get();
     return {
+      total: Object.values(ordersByStatus).flat().length,
       pending: ordersByStatus.pending.length,
       accepted: ordersByStatus.accepted.length,
+      rejected: ordersByStatus.rejected.length,
       ready: ordersByStatus.ready.length,
       completed: ordersByStatus.completed.length,
-      rejected: ordersByStatus.rejected.length,
-      total: Object.values(ordersByStatus).flat().length,
     };
   },
+
+  clearError: () => set({ error: null }),
 }));

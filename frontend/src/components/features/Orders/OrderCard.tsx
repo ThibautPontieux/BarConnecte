@@ -1,19 +1,37 @@
 import React from 'react';
-import { Check, X, Clock, Package, Coffee, CheckCircle } from 'lucide-react';
-import type { Order } from '../../../types';
-import { Card } from '../../ui/Card';
-import { Button } from '../../ui/Button';
-import { Badge } from '../../ui/Badge';
-import { formatPrice, formatTime } from '../../../utils/formatters';
-import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, getOrderWorkflow } from '../../../types/Order';
+import { 
+  Clock, 
+  CheckCircle, 
+  XCircle, 
+  Package, 
+  Search,
+  Edit3,
+  Zap,
+  AlertTriangle,
+  User,
+  Euro,
+  Calendar
+} from 'lucide-react';
+import type { Order } from '../../../types/Order';
+import { 
+  getOrderWorkflow, 
+  ORDER_STATUS_LABELS, 
+  ORDER_STATUS_COLORS, 
+  hasOrderBeenModified 
+} from '../../../types/Order';
+import { useOrderEditing } from '../../../hooks/useOrderEditing';
+import { useOrderFeedback } from './OrderActionFeedback';
+import { StockCheckDisplay } from './StockCheckDisplay';
+import { OrderEditModal } from './OrderEditModal';
+import { OrderModificationHistory } from './OrderModificationHistory';
+import { QuickEditSuggestions } from './QuickEditSuggestions';
 
 interface OrderCardProps {
   order: Order;
-  onAccept?: (orderId: number) => void;
-  onReject?: (orderId: number) => void;
-  onMarkReady?: (orderId: number) => void;
-  onComplete?: (orderId: number) => void;
-  showActions?: boolean;
+  onAccept?: () => void;
+  onReject?: () => void;
+  onMarkReady?: () => void;
+  onComplete?: () => void;
 }
 
 export const OrderCard: React.FC<OrderCardProps> = ({
@@ -21,187 +39,387 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   onAccept,
   onReject,
   onMarkReady,
-  onComplete,
-  showActions = true,
+  onComplete
 }) => {
+  // Hook d'édition personnalisé
+  const {
+    isCheckingStock,
+    isEditing,
+    showEditModal,
+    showStockCheck,
+    stockCheck,
+    suggestions,
+    checkStock,
+    openEditModal,
+    closeEditModal,
+    saveEdit,
+    acceptWithoutOutOfStock,
+    acceptWithAdjustedQuantities,
+    getSuggestions,
+    hasStockIssues,
+    getIssueCount,
+    getIssuesSummary,
+    setShowStockCheck,
+    error
+  } = useOrderEditing(order.id);
+
+  // Hook de feedback
+  const feedback = useOrderFeedback();
+
   const workflow = getOrderWorkflow(order.status);
 
-  const getStatusIcon = () => {
-    switch (order.status) {
-      case 'pending':
-        return <Clock className="w-4 h-4" />;
-      case 'accepted':
-        return <CheckCircle className="w-4 h-4" />;
-      case 'rejected':
-        return <X className="w-4 h-4" />;
-      case 'ready':
-        return <Package className="w-4 h-4" />;
-      case 'completed':
-        return <Coffee className="w-4 h-4" />;
-      default:
-        return <Clock className="w-4 h-4" />;
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('fr-FR', { 
+      hour: '2-digit', 
+      minute: '2-digit'
+    });
+  };
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // === GESTIONNAIRES D'ÉVÉNEMENTS ===
+
+  const handleCheckStock = async () => {
+    try {
+      const result = await checkStock();
+      if (result) {
+        feedback.info.stockChecked(order.id, result.issues.length);
+      }
+    } catch (error) {
+      feedback.error.orderAction('vérifier le stock', order.id, 'Erreur réseau');
     }
   };
 
-  const getStatusBadge = () => {
-    const colorClass = ORDER_STATUS_COLORS[order.status] || ORDER_STATUS_COLORS.pending;
-    const label = ORDER_STATUS_LABELS[order.status] || 'Inconnu';
-    
-    return (
-      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
-        {getStatusIcon()}
-        {label}
-      </span>
-    );
+  const handleEditOrder = async () => {
+    try {
+      await openEditModal();
+    } catch (error) {
+      feedback.error.orderAction('ouvrir l\'éditeur', order.id, 'Impossible d\'ouvrir l\'éditeur');
+    }
   };
 
-  const renderActions = () => {
-    if (!showActions) return null;
-
-    const actions = [];
-
-    if (workflow.canAccept && onAccept) {
-      actions.push(
-        <Button
-          key="accept"
-          onClick={() => onAccept(order.id)}
-          variant="success"
-          icon={Check}
-          size="sm"
-          className="flex-1 md:flex-initial md:min-w-[100px]"
-        >
-          Accepter
-        </Button>
-      );
+  const handleSaveEdit = async (editRequest: any) => {
+    try {
+      const success = await saveEdit(editRequest);
+      if (success) {
+        feedback.success.orderEdited(order.id, editRequest.reason);
+      }
+    } catch (error) {
+      feedback.error.orderAction('sauvegarder les modifications', order.id, 'Échec de la sauvegarde');
     }
+  };
 
-    if (workflow.canReject && onReject) {
-      actions.push(
-        <Button
-          key="reject"
-          onClick={() => onReject(order.id)}
-          variant="danger"
-          icon={X}
-          size="sm"
-          className="flex-1 md:flex-initial md:min-w-[100px]"
-        >
-          Refuser
-        </Button>
-      );
+  const handleAcceptPartial = async () => {
+    try {
+      const success = await acceptWithoutOutOfStock();
+      if (success && stockCheck) {
+        const removedCount = stockCheck.issues.filter(i => i.type === 'OutOfStock').length;
+        feedback.success.partialAccept(order.id, removedCount);
+      }
+    } catch (error) {
+      feedback.error.orderAction('accepter partiellement', order.id, 'Échec de l\'acceptation partielle');
     }
+  };
 
-    if (workflow.canMarkReady && onMarkReady) {
-      actions.push(
-        <Button
-          key="ready"
-          onClick={() => onMarkReady(order.id)}
-          variant="primary"
-          icon={Package}
-          size="sm"
-          className="flex-1 md:flex-initial md:min-w-[100px]"
-        >
-          Prête
-        </Button>
-      );
+  const handleAcceptAdjusted = async () => {
+    try {
+      const success = await acceptWithAdjustedQuantities();
+      if (success && stockCheck) {
+        const modifiedCount = stockCheck.issues.filter(i => i.type === 'InsufficientStock').length;
+        feedback.success.quantitiesModified(order.id, modifiedCount);
+      }
+    } catch (error) {
+      feedback.error.orderAction('ajuster les quantités', order.id, 'Échec de l\'ajustement');
     }
+  };
 
-    if (workflow.canComplete && onComplete) {
-      actions.push(
-        <Button
-          key="complete"
-          onClick={() => onComplete(order.id)}
-          variant="success"
-          icon={Coffee}
-          size="sm"
-          className="flex-1 md:flex-initial md:min-w-[100px]"
-        >
-          Finaliser
-        </Button>
-      );
+  const handleGetSuggestions = async () => {
+    try {
+      await getSuggestions();
+    } catch (error) {
+      feedback.error.orderAction('récupérer les suggestions', order.id, 'Impossible de générer les suggestions');
     }
+  };
 
-    return actions.length > 0 ? (
-      <div className="flex gap-2 justify-center md:justify-end mt-4">
-        {actions}
-      </div>
-    ) : null;
+  const handleAcceptNormal = async () => {
+    try {
+      if (onAccept) {
+        await onAccept();
+        feedback.success.orderAccepted(order.id);
+      }
+    } catch (error) {
+      feedback.error.orderAction('accepter', order.id, 'Échec de l\'acceptation');
+    }
   };
 
   return (
-    <Card className="p-6 hover:shadow-md transition-shadow">
-      {/* Layout desktop optimisé */}
-      <div className="md:flex md:items-start md:justify-between md:gap-6">
-        
-        {/* Info commande - gauche sur desktop */}
-        <div className="md:flex-1">
-          <div className="flex justify-between items-start mb-3">
-            <div>
-              <h3 className="text-lg font-semibold">{order.customerName}</h3>
-              <div className="flex items-center gap-2 mt-1">
-                <p className="text-gray-500 text-sm">{formatTime(order.timestamp)}</p>
-                <span className="text-gray-300">•</span>
-                <span className="text-xs text-gray-500">#{order.id}</span>
-              </div>
-            </div>
-            <div className="flex flex-col items-end gap-2">
-              {getStatusBadge()}
-              <span className="text-xl font-bold text-amber-600 md:hidden">
-                {formatPrice(order.total)}
-              </span>
-            </div>
-          </div>
-
-          {/* Items de la commande */}
-          <div className="mb-4 md:mb-0">
-            <div className="space-y-1">
-              {order.items.map((item, index) => (
-                <div key={index} className="flex justify-between py-1 text-sm md:text-base">
-                  <span className="text-gray-700">
-                    <span className="font-medium">{item.quantity}x</span> {item.name}
-                  </span>
-                  <span className="md:hidden font-medium">
-                    {formatPrice(item.price * item.quantity)}
-                  </span>
-                </div>
-              ))}
-            </div>
-            
-            {/* Informations supplémentaires */}
-            <div className="mt-2 pt-2 border-t border-gray-100">
-              <div className="text-xs text-gray-500 flex justify-between">
-                <span>{order.items.length} article(s)</span>
+    <div className="bg-white border rounded-lg shadow-sm overflow-hidden">
+      
+      {/* Header avec informations principales */}
+      <div className="p-4 border-b bg-gray-50">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex flex-col">
+              <h3 className="font-semibold text-lg flex items-center gap-2">
                 <span>Commande #{order.id}</span>
+                {hasOrderBeenModified(order) && (
+                  <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                    ✏️ Modifiée
+                  </span>
+                )}
+                {hasStockIssues() && (
+                  <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded-full">
+                    ⚠️ {getIssueCount()} problème(s)
+                  </span>
+                )}
+              </h3>
+              <div className="text-sm text-gray-600 flex items-center gap-4">
+                <span className="flex items-center gap-1">
+                  <User className="w-3 h-3" />
+                  {order.customerName}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Euro className="w-3 h-3" />
+                  {order.total.toFixed(2)}€
+                </span>
+                <span className="flex items-center gap-1">
+                  <Calendar className="w-3 h-3" />
+                  {formatDate(order.timestamp)}
+                </span>
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Partie droite sur desktop - Prix et actions */}
-        <div className="md:flex md:flex-col md:items-end md:gap-4 md:min-w-[200px]">
-          
-          {/* Prix détaillé - visible seulement sur desktop */}
-          <div className="hidden md:block">
-            <div className="text-right mb-2 space-y-1">
-              {order.items.map((item, index) => (
-                <div key={index} className="text-sm text-gray-600">
-                  {formatPrice(item.price * item.quantity)}
+              {hasStockIssues() && (
+                <div className="text-xs text-orange-600 mt-1">
+                  {getIssuesSummary()}
                 </div>
-              ))}
-            </div>
-            <div className="text-xl font-bold text-amber-600 border-t pt-2">
-              {formatPrice(order.total)}
+              )}
             </div>
           </div>
 
-          {/* Actions */}
-          {renderActions()}
+          {/* Statut */}
+          <div className={`px-3 py-1 rounded-full text-sm font-medium ${ORDER_STATUS_COLORS[order.status]}`}>
+            {ORDER_STATUS_LABELS[order.status]}
+          </div>
         </div>
       </div>
 
-      {/* Actions sur mobile (en bas) */}
-      <div className="md:hidden">
-        {renderActions()}
+      {/* Historique des modifications si applicable */}
+      {hasOrderBeenModified(order) && (
+        <div className="p-4 border-b">
+          <OrderModificationHistory order={order} />
+        </div>
+      )}
+
+      {/* Articles de la commande */}
+      <div className="p-4">
+        <h4 className="font-medium mb-3 flex items-center gap-2">
+          <Package className="w-4 h-4" />
+          Articles ({order.items.length})
+        </h4>
+        <div className="space-y-2">
+          {order.items.map((item, index) => {
+            const itemHasIssue = stockCheck?.issues.find(issue => issue.drinkId === item.id);
+            
+            return (
+              <div 
+                key={index}
+                className={`flex justify-between items-center p-2 rounded ${
+                  itemHasIssue 
+                    ? 'bg-orange-50 border border-orange-200' 
+                    : 'bg-gray-50'
+                }`}
+              >
+                <div>
+                  <span className="font-medium">{item.name}</span>
+                  <span className="text-sm text-gray-600 ml-2">
+                    {item.price.toFixed(2)}€ × {item.quantity}
+                  </span>
+                  {itemHasIssue && (
+                    <span className="ml-2 text-xs text-orange-600">
+                      ⚠️ {itemHasIssue.type === 'OutOfStock' ? 'Rupture' : 'Stock limité'}
+                    </span>
+                  )}
+                </div>
+                <div className="font-medium">
+                  {(item.price * item.quantity).toFixed(2)}€
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </Card>
+
+      {/* Vérification de stock si affichée */}
+      {showStockCheck && stockCheck && (
+        <div className="p-4 border-t">
+          <StockCheckDisplay
+            stockCheck={stockCheck}
+            onEdit={workflow.canEdit ? handleEditOrder : undefined}
+            onAcceptPartial={workflow.canAcceptPartially ? handleAcceptPartial : undefined}
+            onProceedAnyway={stockCheck.isFullyAvailable ? handleAcceptNormal : undefined}
+          />
+        </div>
+      )}
+
+      {/* Suggestions d'édition rapide */}
+      {stockCheck && !stockCheck.isFullyAvailable && showStockCheck && (
+        <div className="p-4 border-t">
+          <QuickEditSuggestions
+            order={order}
+            stockCheck={stockCheck}
+            suggestions={suggestions}
+            onApplySuggestion={async (id) => {
+              // TODO: Implémenter l'application de suggestions spécifiques
+              console.log('Applying suggestion:', id);
+              return true;
+            }}
+            onAcceptWithoutOutOfStock={handleAcceptPartial}
+            onAcceptWithAdjustedQuantities={handleAcceptAdjusted}
+            isLoading={isEditing}
+          />
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="p-4 border-t bg-gray-50">
+        
+        {/* Actions pour commandes en attente */}
+        {order.status === 'pending' && (
+          <div className="space-y-3">
+            
+            {/* Actions de vérification et édition */}
+            <div className="flex gap-2">
+              
+              <button
+                onClick={handleCheckStock}
+                disabled={isCheckingStock}
+                className="flex-1 bg-blue-100 text-blue-700 py-2 px-3 rounded-lg hover:bg-blue-200 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isCheckingStock ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-blue-700 border-t-transparent rounded-full animate-spin" />
+                    Vérification...
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4" />
+                    Vérifier stock
+                  </>
+                )}
+              </button>
+
+              {stockCheck && !stockCheck.isFullyAvailable && (
+                <button
+                  onClick={handleEditOrder}
+                  disabled={isEditing}
+                  className="flex-1 bg-orange-100 text-orange-700 py-2 px-3 rounded-lg hover:bg-orange-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <Edit3 className="w-4 h-4" />
+                  Éditer
+                </button>
+              )}
+
+              {stockCheck && suggestions && (
+                <button
+                  onClick={handleGetSuggestions}
+                  className="bg-purple-100 text-purple-700 py-2 px-3 rounded-lg hover:bg-purple-200 flex items-center gap-2"
+                >
+                  <Zap className="w-4 h-4" />
+                  Suggestions
+                </button>
+              )}
+            </div>
+
+            {/* Bouton pour masquer/afficher la vérification de stock */}
+            {stockCheck && (
+              <div className="text-center">
+                <button
+                  onClick={() => setShowStockCheck(!showStockCheck)}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  {showStockCheck ? 'Masquer les détails' : 'Afficher les détails'}
+                </button>
+              </div>
+            )}
+
+            {/* Actions principales */}
+            <div className="flex gap-2">
+              
+              <button
+                onClick={handleAcceptNormal}
+                disabled={stockCheck && !stockCheck.isFullyAvailable}
+                className="flex-1 bg-green-600 text-white py-2 px-3 rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <CheckCircle className="w-4 h-4" />
+                Accepter
+              </button>
+
+              <button
+                onClick={onReject}
+                className="flex-1 bg-red-600 text-white py-2 px-3 rounded-lg hover:bg-red-700 flex items-center justify-center gap-2"
+              >
+                <XCircle className="w-4 h-4" />
+                Refuser
+              </button>
+            </div>
+
+            {/* Warning si problème de stock */}
+            {stockCheck && !stockCheck.isFullyAvailable && !showStockCheck && (
+              <div className="text-xs text-orange-700 bg-orange-50 p-2 rounded flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                {getIssueCount()} problème(s) de stock détecté(s). 
+                Cliquez sur "Vérifier stock" pour plus de détails.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Actions pour commandes acceptées */}
+        {order.status === 'accepted' && onMarkReady && (
+          <button
+            onClick={onMarkReady}
+            className="w-full bg-blue-600 text-white py-2 px-3 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+          >
+            <Package className="w-4 h-4" />
+            Marquer comme prête
+          </button>
+        )}
+
+        {/* Actions pour commandes prêtes */}
+        {order.status === 'ready' && onComplete && (
+          <button
+            onClick={onComplete}
+            className="w-full bg-green-600 text-white py-2 px-3 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2"
+          >
+            <CheckCircle className="w-4 h-4" />
+            Finaliser
+          </button>
+        )}
+
+        {/* Affichage des erreurs */}
+        {error && (
+          <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+            {error}
+          </div>
+        )}
+      </div>
+
+      {/* Modal d'édition */}
+      {showEditModal && stockCheck && (
+        <OrderEditModal
+          order={order}
+          stockCheck={stockCheck}
+          onSave={handleSaveEdit}
+          onCancel={closeEditModal}
+          isLoading={isEditing}
+        />
+      )}
+    </div>
   );
 };
