@@ -21,6 +21,22 @@ public class Order
     
     public List<OrderItem> Items { get; set; } = new();
     
+    /// <summary>
+    /// Indique si la commande a été partiellement modifiée par le barman
+    /// </summary>
+    public bool IsPartiallyModified { get; set; } = false;
+    
+    /// <summary>
+    /// Raison de la modification fournie par le barman
+    /// </summary>
+    [MaxLength(500)]
+    public string? ModificationReason { get; set; }
+    
+    /// <summary>
+    /// Date et heure de la dernière modification
+    /// </summary>
+    public DateTime? LastModifiedAt { get; set; }
+    
     // Méthodes utilitaires
     public void Accept()
     {
@@ -45,6 +61,29 @@ public class Order
         Status = OrderStatus.Completed;
         CompletedAt = DateTime.UtcNow;
     }
+    
+    /// <summary>
+    /// Marque la commande comme modifiée avec une raison
+    /// </summary>
+    public void MarkAsModified(string reason)
+    {
+        IsPartiallyModified = true;
+        ModificationReason = reason;
+        LastModifiedAt = DateTime.UtcNow;
+    }
+    
+    /// <summary>
+    /// Recalcule le montant total basé sur les items actuels
+    /// </summary>
+    public void RecalculateTotal()
+    {
+        TotalAmount = Items.Sum(item => item.TotalPrice);
+    }
+    
+    /// <summary>
+    /// Vérifie si la commande peut être éditée
+    /// </summary>
+    public bool CanBeEdited => Status == OrderStatus.Pending;
 }
 
 public class OrderItem

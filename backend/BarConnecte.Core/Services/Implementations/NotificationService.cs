@@ -35,4 +35,29 @@ public class NotificationService : INotificationService
         // TODO: Notifier les interfaces de la mise à jour du stock
         await Task.CompletedTask;
     }
+    
+    public async Task NotifyOrderModified(Order order, string reason)
+    {
+        Console.WriteLine($"✏️ Commande #{order.Id} modifiée par le barman");
+        Console.WriteLine($"   └── Client: {order.CustomerName}");
+        Console.WriteLine($"   └── Raison: {reason}");
+        Console.WriteLine($"   └── Nouveau total: {order.TotalAmount:C}");
+        Console.WriteLine($"   └── Modifiée le: {order.LastModifiedAt}");
+        
+        if (order.Items.Count != 0)
+        {
+            Console.WriteLine("   └── Articles restants:");
+            foreach (var item in order.Items)
+            {
+                Console.WriteLine($"       • {item.DrinkName} x{item.Quantity} ({item.TotalPrice:C})");
+            }
+        }
+        
+        // TODO: Implémenter la notification temps réel avec SignalR
+        // - Envoyer notification push au client (email, SMS, web push)
+        // - Mettre à jour l'interface client en temps réel
+        // - Logger la modification pour l'audit
+        
+        await Task.CompletedTask;
+    }
 }

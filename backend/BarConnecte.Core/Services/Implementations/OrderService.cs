@@ -174,4 +174,238 @@ public class OrderService : IOrderService
         }
         return true;
     }
+    
+    public async Task<StockCheckResult> CheckOrderStockDetailedAsync(int orderId)
+    {
+        var order = await GetOrderAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Commande introuvable");
+
+        var result = new StockCheckResult { IsFullyAvailable = true };
+
+        foreach (var item in order.Items)
+        {
+            var drink = await _context.Drinks.FindAsync(item.DrinkId);
+            if (drink == null)
+            {
+                // Boisson supprimée du catalogue
+                result.Issues.Add(new StockIssue
+                {
+                    DrinkId = item.DrinkId,
+                    DrinkName = item.DrinkName,
+                    RequestedQuantity = item.Quantity,
+                    AvailableQuantity = 0,
+                    Type = StockIssueType.OutOfStock
+                });
+                result.IsFullyAvailable = false;
+                continue;
+            }
+
+            if (drink.Quantity == 0)
+            {
+                // Complètement en rupture
+                result.Issues.Add(new StockIssue
+                {
+                    DrinkId = item.DrinkId,
+                    DrinkName = item.DrinkName,
+                    RequestedQuantity = item.Quantity,
+                    AvailableQuantity = 0,
+                    Type = StockIssueType.OutOfStock
+                });
+                result.IsFullyAvailable = false;
+            }
+            else if (drink.Quantity < item.Quantity)
+            {
+                // Stock insuffisant
+                result.Issues.Add(new StockIssue
+                {
+                    DrinkId = item.DrinkId,
+                    DrinkName = item.DrinkName,
+                    RequestedQuantity = item.Quantity,
+                    AvailableQuantity = drink.Quantity,
+                    Type = StockIssueType.InsufficientStock
+                });
+                result.IsFullyAvailable = false;
+            }
+        }
+
+        return result;
+    }
+
+    public async Task<Order> EditOrderAsync(int orderId, List<OrderItemRequest> newItems, string reason)
+    {
+        var order = await GetOrderAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Commande introuvable");
+
+        if (!order.CanBeEdited)
+            throw new InvalidOperationException("Cette commande ne peut plus être éditée");
+
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("Une raison doit être fournie pour la modification");
+
+        // Vérifier que les nouveaux articles sont disponibles
+        if (!await CheckStockAvailabilityAsync(newItems))
+        {
+            throw new InvalidOperationException("Stock insuffisant pour les nouveaux articles");
+        }
+
+        // Supprimer les anciens items
+        _context.OrderItems.RemoveRange(order.Items);
+        order.Items.Clear();
+
+        // Ajouter les nouveaux items
+        foreach (var itemRequest in newItems)
+        {
+            var drink = await _context.Drinks.FindAsync(itemRequest.DrinkId);
+            if (drink == null) continue;
+
+            var orderItem = new OrderItem
+            {
+                OrderId = order.Id,
+                DrinkId = drink.Id,
+                DrinkName = drink.Name,
+                Quantity = itemRequest.Quantity,
+                UnitPrice = drink.Price,
+                Order = order
+            };
+
+            order.Items.Add(orderItem);
+        }
+
+        // Recalculer le total et marquer comme modifié
+        order.RecalculateTotal();
+        order.MarkAsModified(reason);
+
+        await _context.SaveChangesAsync();
+
+        // Notifier le client de la modification
+        await _notificationService.NotifyOrderModified(order, reason);
+
+        return order;
+    }
+
+    public async Task<Order> AcceptPartialOrderAsync(int orderId, List<int> itemsToRemove, string reason)
+    {
+        var order = await GetOrderAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Commande introuvable");
+
+        if (!order.CanBeEdited)
+            throw new InvalidOperationException("Cette commande ne peut plus être éditée");
+
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("Une raison doit être fournie pour la modification");
+
+        // Retirer les articles problématiques
+        var itemsToRemoveFromDb = order.Items.Where(item => itemsToRemove.Contains(item.Id)).ToList();
+        
+        foreach (var item in itemsToRemoveFromDb)
+        {
+            order.Items.Remove(item);
+            _context.OrderItems.Remove(item);
+        }
+
+        if (!order.Items.Any())
+            throw new InvalidOperationException("Impossible de retirer tous les articles de la commande");
+
+        // Vérifier que les articles restants sont disponibles
+        var remainingItemRequests = order.Items.Select(i => new OrderItemRequest(i.DrinkId, i.Quantity)).ToList();
+        if (!await CheckStockAvailabilityAsync(remainingItemRequests))
+        {
+            throw new InvalidOperationException("Stock insuffisant même après retrait des articles problématiques");
+        }
+
+        // Recalculer le total et marquer comme modifié
+        order.RecalculateTotal();
+        order.MarkAsModified(reason);
+
+        // Accepter la commande et mettre à jour les stocks
+        order.Accept();
+        
+        foreach (var item in order.Items)
+        {
+            var drink = await _context.Drinks.FindAsync(item.DrinkId);
+            if (drink != null)
+            {
+                drink.Quantity -= item.Quantity;
+                await _notificationService.NotifyStockUpdate(drink.Id, drink.Quantity);
+            }
+        }
+
+        await _context.SaveChangesAsync();
+
+        // Notifier le client et mettre à jour le statut
+        await _notificationService.NotifyOrderModified(order, reason);
+        await _notificationService.NotifyOrderStatusUpdate(order);
+
+        return order;
+    }
+
+    public async Task<Order> ModifyOrderQuantitiesAsync(int orderId, Dictionary<int, int> quantityChanges, string reason)
+    {
+        var order = await GetOrderAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Commande introuvable");
+
+        if (!order.CanBeEdited)
+            throw new InvalidOperationException("Cette commande ne peut plus être éditée");
+
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("Une raison doit être fournie pour la modification");
+
+        // Appliquer les changements de quantité
+        bool hasChanges = false;
+        var itemsToRemove = new List<OrderItem>();
+
+        foreach (var item in order.Items)
+        {
+            if (quantityChanges.TryGetValue(item.Id, out int newQuantity))
+            {
+                if (newQuantity <= 0)
+                {
+                    // Marquer pour suppression
+                    itemsToRemove.Add(item);
+                    hasChanges = true;
+                }
+                else if (newQuantity != item.Quantity)
+                {
+                    // Modifier la quantité
+                    item.Quantity = newQuantity;
+                    hasChanges = true;
+                }
+            }
+        }
+
+        if (!hasChanges)
+            throw new InvalidOperationException("Aucun changement détecté");
+
+        // Supprimer les articles avec quantité 0
+        foreach (var itemToRemove in itemsToRemove)
+        {
+            order.Items.Remove(itemToRemove);
+            _context.OrderItems.Remove(itemToRemove);
+        }
+
+        if (!order.Items.Any())
+            throw new InvalidOperationException("Impossible de retirer tous les articles de la commande");
+
+        // Vérifier la disponibilité des nouvelles quantités
+        var updatedItemRequests = order.Items.Select(i => new OrderItemRequest(i.DrinkId, i.Quantity)).ToList();
+        if (!await CheckStockAvailabilityAsync(updatedItemRequests))
+        {
+            throw new InvalidOperationException("Stock insuffisant pour les nouvelles quantités");
+        }
+
+        // Recalculer le total et marquer comme modifié
+        order.RecalculateTotal();
+        order.MarkAsModified(reason);
+
+        await _context.SaveChangesAsync();
+
+        // Notifier le client
+        await _notificationService.NotifyOrderModified(order, reason);
+
+        return order;
+    }
 }
