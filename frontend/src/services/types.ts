@@ -15,6 +15,7 @@ export interface Drink {
 }
 
 export interface DrinkResponse {
+  id: number;
   name: string;
   quantity: number;
   price: string;          // string côté public API

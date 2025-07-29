@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import type { Order } from '../types';
+import type { Order, OrderStatus } from '../types';
 import { PublicApiService } from '../services/publicApi';
 import { AdminApiService } from '../services/adminApi';
 import type { CreateOrderRequest, OrderResponse } from '../services/types';
+import { extractErrorMessage, getUserFriendlyMessage } from '../utils/errorHandling';
 
 interface OrderStore {
   orders: Order[];
@@ -24,9 +25,6 @@ interface OrderStore {
   fetchOrdersByStatus: (status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed') => Promise<void>;
   fetchAllOrders: () => Promise<void>;
   refreshOrdersData: () => Promise<void>;
-  
-  // Méthodes legacy (pour compatibilité)
-  fetchPendingOrders: () => Promise<void>;
   
   // Actions sur les commandes
   acceptOrder: (orderId: number) => Promise<void>;
@@ -299,16 +297,11 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     await fetchAllOrders();
   },
 
-  // === MÉTHODES LEGACY (pour compatibilité) ===
-  
-  fetchPendingOrders: async () => {
-    const { fetchOrdersByStatus } = get();
-    await fetchOrdersByStatus('pending');
-  },
-
   // === ACTIONS SUR LES COMMANDES ===
   
   acceptOrder: async (orderId: number) => {
+    set({ error: null }); // Reset de l'erreur précédente
+
     try {
       console.log('✅ Acceptation commande:', orderId);
       const updatedOrder = await AdminApiService.acceptOrder(orderId);
@@ -339,17 +332,25 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       
     } catch (error) {
       console.error('❌ Erreur acceptation commande:', error);
-      set({ error: error instanceof Error ? error.message : 'Erreur lors de l\'acceptation de la commande' });
+      const errorMessage = getUserFriendlyMessage(error);
+      set({ error: errorMessage });
+      
+      // Si c'est une erreur de stock, on peut proposer des actions spécifiques
+      if (errorMessage.toLowerCase().includes('stock')) {
+        // Optionnel: déclencher un refresh des produits pour voir les stocks actuels
+        console.log('🔄 Erreur de stock détectée, refresh recommandé');
+      }
     }
   },
 
   rejectOrder: async (orderId: number) => {
+    set({ error: null });
+    
     try {
       console.log('❌ Refus commande:', orderId);
       const updatedOrder = await AdminApiService.rejectOrder(orderId);
       
       set((state) => {
-        // Assurer la structure et obtenir les listes
         const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
         const pendingOrders = safeOrdersByStatus.pending.filter(order => order.id !== orderId);
         const orderToMove = safeOrdersByStatus.pending.find(order => order.id === orderId);
@@ -374,17 +375,19 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       
     } catch (error) {
       console.error('❌ Erreur refus commande:', error);
-      set({ error: error instanceof Error ? error.message : 'Erreur lors du refus de la commande' });
+      const errorMessage = getUserFriendlyMessage(error);
+      set({ error: errorMessage });
     }
   },
 
   markOrderReady: async (orderId: number) => {
+    set({ error: null });
+    
     try {
       console.log('📦 Commande prête:', orderId);
       const updatedOrder = await AdminApiService.markOrderReady(orderId);
       
       set((state) => {
-        // Assurer la structure et obtenir les listes
         const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
         const acceptedOrders = safeOrdersByStatus.accepted.filter(order => order.id !== orderId);
         const orderToMove = safeOrdersByStatus.accepted.find(order => order.id === orderId);
@@ -409,17 +412,19 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       
     } catch (error) {
       console.error('❌ Erreur marquage prêt:', error);
-      set({ error: error instanceof Error ? error.message : 'Erreur lors du marquage comme prête' });
+      const errorMessage = getUserFriendlyMessage(error);
+      set({ error: errorMessage });
     }
   },
 
   completeOrder: async (orderId: number) => {
+    set({ error: null });
+    
     try {
       console.log('🏁 Finalisation commande:', orderId);
       const updatedOrder = await AdminApiService.completeOrder(orderId);
       
       set((state) => {
-        // Assurer la structure et obtenir les listes
         const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
         const readyOrders = safeOrdersByStatus.ready.filter(order => order.id !== orderId);
         const orderToMove = safeOrdersByStatus.ready.find(order => order.id === orderId);
@@ -444,12 +449,18 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       
     } catch (error) {
       console.error('❌ Erreur finalisation commande:', error);
-      set({ error: error instanceof Error ? error.message : 'Erreur lors de la finalisation de la commande' });
+      const errorMessage = getUserFriendlyMessage(error);
+      set({ error: errorMessage });
     }
   },
 
   // === MÉTHODES UTILITAIRES ===
-  
+
+  // Nettoyer les erreurs
+  clearError: () => {
+    set({ error: null });
+  },
+
   updateOrderStatus: (orderId, status) =>
     set((state) => ({
       orders: state.orders.map((order) =>
@@ -484,6 +495,4 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       total: Object.values(ordersByStatus).flat().length,
     };
   },
-
-  clearError: () => set({ error: null }),
 }));

@@ -21,7 +21,8 @@ public static class CreateDrink
             Name = drink.Data.Name,
             Quantity = drink.Data.Quantity,
             Category = drink.Data.Category,
-            Description = drink.Data.Description
+            Description = drink.Data.Description,
+            Price = drink.Data.Price
         };
         
         if (string.IsNullOrWhiteSpace(newDrink.Name) || newDrink.Quantity <= 0)
@@ -35,11 +36,12 @@ public static class CreateDrink
     }
 }
 
-public abstract record CreateDrinkRequest
+[PublicAPI]
+public record CreateDrinkRequest
 {
     public string Name { get; init; } = string.Empty;
     public decimal Quantity { get; init; }
     public DrinkCategory Category { get; init; }
     public string Description { get; init; } = string.Empty;
-    public string Price { get; init; } = string.Empty;
+    public decimal Price { get; init; }
 }

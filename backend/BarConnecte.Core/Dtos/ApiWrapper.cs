@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using JetBrains.Annotations;
 
 namespace BarConnecte.Core.Dtos;
@@ -9,6 +10,14 @@ public class ApiWrapper<T>
     public T? Data { get; set; }
     public string? ErrorMessage { get; set; }
 
+    [JsonConstructor]
+    public ApiWrapper()
+    {
+        Success = false;
+        Data = default(T);
+        ErrorMessage = null;
+    }
+    
     public ApiWrapper(T data)
     {
         Success = true;

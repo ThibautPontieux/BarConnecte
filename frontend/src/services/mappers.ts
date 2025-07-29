@@ -19,7 +19,7 @@ export class DrinkMapper {
   // Convertir DrinkResponse (API Public) vers Product (frontend)
   static drinkResponseToProduct(drink: DrinkResponse, id: number = 0): Product {
     return {
-      id,
+      id: id || drink.id, // Utiliser l'ID fourni ou celui de la réponse
       name: drink.name,
       price: parseFloat(drink.price || '0'), // Conversion string -> number
       stock: drink.quantity,
@@ -54,7 +54,7 @@ export class DrinkMapper {
       quantity: product.stock,
       price: product.price.toString(), // Conversion number -> string pour l'API
       category,
-      description: product.description,
+      description: product.description || ''
     };
   }
 

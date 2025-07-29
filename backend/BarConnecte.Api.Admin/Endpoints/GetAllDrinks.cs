@@ -14,6 +14,7 @@ public class GetAllDrinks
     {
         var drinks = await db.Drinks.ToListAsync();
         var response = drinks.Select(d => new DrinkResponse(
+            d.Id,
             d.Name,
             d.Quantity,
             d.Description,
@@ -25,6 +26,7 @@ public class GetAllDrinks
     
     public record GetMenuResponse(DrinkResponse[] Drinks);
     public record DrinkResponse(
+        int Id,
         string Name,
         decimal Quantity,
         string Description,

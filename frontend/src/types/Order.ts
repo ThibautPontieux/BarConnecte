@@ -65,7 +65,7 @@ export interface OrderStats {
   rejected: number;
   ready: number;
   completed: number;
-} pour le suivi des commandes
+}
 export interface OrderStatus {
   pending: 'En attente';
   accepted: 'Acceptée';
