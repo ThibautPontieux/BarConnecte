@@ -6,6 +6,13 @@ import type { CreateOrderRequest, OrderResponse } from '../services/types';
 
 interface OrderStore {
   orders: Order[];
+  ordersByStatus: {
+    pending: Order[];
+    accepted: Order[];
+    rejected: Order[];
+    ready: Order[];
+    completed: Order[];
+  };
   loading: boolean;
   error: string | null;
   
@@ -13,8 +20,15 @@ interface OrderStore {
   addOrder: (order: Omit<Order, 'id' | 'timestamp'>) => Promise<string>;
   getOrderById: (orderId: number) => Promise<Order | null>;
   
-  // Méthodes Barman/Admin
+  // Méthodes Barman/Admin - Nouvelles avec route générique
+  fetchOrdersByStatus: (status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed') => Promise<void>;
+  fetchAllOrders: () => Promise<void>;
+  refreshOrdersData: () => Promise<void>;
+  
+  // Méthodes legacy (pour compatibilité)
   fetchPendingOrders: () => Promise<void>;
+  
+  // Actions sur les commandes
   acceptOrder: (orderId: number) => Promise<void>;
   rejectOrder: (orderId: number) => Promise<void>;
   markOrderReady: (orderId: number) => Promise<void>;
@@ -24,11 +38,91 @@ interface OrderStore {
   updateOrderStatus: (orderId: number, status: 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed') => void;
   getPendingOrders: () => Order[];
   getOrdersByStatus: (status: string) => Order[];
+  getAllOrdersFlat: () => Order[];
+  getOrdersStats: () => { total: number; pending: number; accepted: number; ready: number; completed: number; rejected: number };
   clearError: () => void;
 }
 
+// Fonction utilitaire pour s'assurer que ordersByStatus est bien initialisé
+const ensureOrdersByStatusStructure = (ordersByStatus: any) => {
+  const defaultStructure = {
+    pending: [],
+    accepted: [],
+    rejected: [],
+    ready: [],
+    completed: [],
+  };
+
+  return {
+    pending: Array.isArray(ordersByStatus?.pending) ? ordersByStatus.pending : [],
+    accepted: Array.isArray(ordersByStatus?.accepted) ? ordersByStatus.accepted : [],
+    rejected: Array.isArray(ordersByStatus?.rejected) ? ordersByStatus.rejected : [],
+    ready: Array.isArray(ordersByStatus?.ready) ? ordersByStatus.ready : [],
+    completed: Array.isArray(ordersByStatus?.completed) ? ordersByStatus.completed : [],
+  };
+};
+
+// Fonction utilitaire pour convertir OrderResponse vers Order
+const convertOrderResponse = (orderResponse: OrderResponse, index: number = 0): Order => {
+  console.log('🔄 Conversion OrderResponse:', {
+    id: orderResponse.id,
+    status: orderResponse.status,
+    statusType: typeof orderResponse.status,
+    customerName: orderResponse.customerName
+  });
+
+  // Normaliser le statut (enlever espaces, mettre en minuscules)
+  const normalizedStatus = orderResponse.status?.toString().trim().toLowerCase();
+  
+  // Mapper les statuts possibles
+  const statusMapping: { [key: string]: Order['status'] } = {
+    'pending': 'pending',
+    'accepted': 'accepted',
+    'rejected': 'rejected',
+    'ready': 'ready',
+    'completed': 'completed',
+    // Autres variantes possibles
+    'en_attente': 'pending',
+    'acceptee': 'accepted',
+    'refusee': 'rejected',
+    'prete': 'ready',
+    'terminee': 'completed',
+  };
+
+  const mappedStatus = statusMapping[normalizedStatus] || 'pending';
+  
+  console.log('📍 Status mapping:', {
+    original: orderResponse.status,
+    normalized: normalizedStatus,
+    mapped: mappedStatus
+  });
+
+  return {
+    id: orderResponse.id,
+    items: orderResponse.items.map((item, itemIndex) => ({
+      id: Date.now() + index + itemIndex, // ID temporaire unique
+      name: item.drinkName,
+      price: item.unitPrice,
+      stock: 0, // Non disponible dans la réponse
+      category: 'Unknown',
+      quantity: item.quantity,
+    })),
+    total: orderResponse.totalAmount,
+    status: mappedStatus,
+    customerName: orderResponse.customerName,
+    timestamp: new Date(orderResponse.createdAt),
+  };
+};
+
 export const useOrderStore = create<OrderStore>((set, get) => ({
   orders: [],
+  ordersByStatus: {
+    pending: [],
+    accepted: [],
+    rejected: [],
+    ready: [],
+    completed: [],
+  },
   loading: false,
   error: null,
 
@@ -39,7 +133,7 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     try {
       console.log('📝 Création commande avec données:', orderData);
       
-      // Convertir vers le nouveau format API manuellement
+      // Convertir vers le nouveau format API
       const createOrderRequest: CreateOrderRequest = {
         customerName: orderData.customerName,
         items: orderData.items.map(item => ({
@@ -64,11 +158,26 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
         timestamp: new Date(result.createdAt),
       };
       
-      // Ajouter à la liste locale
-      set((state) => ({
-        orders: [...state.orders, newOrder],
-        loading: false,
-      }));
+      // Ajouter à la liste locale et dans le bon statut
+      set((state) => {
+        console.log('📝 Ajout commande à l\'état:', {
+          newOrderStatus: newOrder.status,
+          currentOrdersByStatus: state.ordersByStatus,
+          existingStatusArray: state.ordersByStatus[newOrder.status]
+        });
+
+        // Vérifier que le tableau pour ce statut existe
+        const currentStatusOrders = state.ordersByStatus[newOrder.status] || [];
+        
+        return {
+          orders: [...state.orders, newOrder],
+          ordersByStatus: {
+            ...state.ordersByStatus,
+            [newOrder.status]: [...currentStatusOrders, newOrder],
+          },
+          loading: false,
+        };
+      });
       
       return result.id.toString();
       
@@ -91,23 +200,7 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       const orderResponse = await PublicApiService.getOrderById(orderId);
       console.log('📦 Commande trouvée:', orderResponse);
       
-      // Convertir vers le format local
-      const order: Order = {
-        id: orderResponse.id,
-        items: orderResponse.items.map((item, index) => ({
-          id: Date.now() + index, // ID temporaire
-          name: item.drinkName,
-          price: item.unitPrice,
-          stock: 0, // Non disponible dans la réponse
-          category: 'Unknown',
-          quantity: item.quantity,
-        })),
-        total: orderResponse.totalAmount,
-        status: orderResponse.status as 'pending' | 'accepted' | 'rejected' | 'ready' | 'completed',
-        customerName: orderResponse.customerName,
-        timestamp: new Date(orderResponse.createdAt),
-      };
-      
+      const order = convertOrderResponse(orderResponse);
       set({ loading: false });
       return order;
       
@@ -121,39 +214,79 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     }
   },
 
-  // === MÉTHODES BARMAN/ADMIN ===
+  // === NOUVELLES MÉTHODES AVEC ROUTE GÉNÉRIQUE ===
   
-  fetchPendingOrders: async () => {
+  fetchOrdersByStatus: async (status) => {
     set({ loading: true, error: null });
     try {
-      console.log('📋 Récupération des commandes en attente...');
-      const orderResponses = await AdminApiService.getPendingOrders();
-      console.log('📊 Commandes reçues:', orderResponses.length);
+      console.log(`📋 Récupération des commandes ${status}...`);
+      const orderResponses = await AdminApiService.getOrdersByStatus(status);
+      console.log(`📊 ${orderResponses.length} commandes ${status} reçues`);
       
       // Convertir les OrderResponse vers Order local
-      const orders: Order[] = orderResponses.map((orderResponse, index) => ({
-        id: orderResponse.id,
-        items: orderResponse.items.map((item, itemIndex) => ({
-          id: Date.now() + index + itemIndex, // ID temporaire unique
-          name: item.drinkName,
-          price: item.unitPrice,
-          stock: 0, // Non disponible dans la réponse
-          category: 'Unknown',
-          quantity: item.quantity,
-        })),
-        total: orderResponse.totalAmount,
-        status: 'pending', // Les commandes pending sont forcément en attente
-        customerName: orderResponse.customerName,
-        timestamp: new Date(orderResponse.createdAt),
+      const orders: Order[] = orderResponses.map((orderResponse, index) => 
+        convertOrderResponse(orderResponse, index)
+      );
+      
+      set((state) => ({
+        ordersByStatus: {
+          ...state.ordersByStatus,
+          [status]: orders,
+        },
+        loading: false,
       }));
       
+    } catch (error) {
+      console.error(`❌ Erreur récupération commandes ${status}:`, error);
       set({ 
-        orders,
+        error: error instanceof Error ? error.message : `Erreur lors de la récupération des commandes ${status}`,
         loading: false 
+      });
+    }
+  },
+
+  fetchAllOrders: async () => {
+    set({ loading: true, error: null });
+    try {
+      console.log('📋 Récupération de toutes les commandes...');
+      
+      // Récupérer toutes les commandes par statut en parallèle
+      const [pending, accepted, ready, completed, rejected] = await Promise.all([
+        AdminApiService.getOrdersByStatus('pending'),
+        AdminApiService.getOrdersByStatus('accepted'),
+        AdminApiService.getOrdersByStatus('ready'),
+        AdminApiService.getOrdersByStatus('completed'),
+        AdminApiService.getOrdersByStatus('rejected'),
+      ]);
+
+      // Convertir toutes les réponses
+      const ordersByStatus = {
+        pending: pending.map((order, index) => convertOrderResponse(order, index)),
+        accepted: accepted.map((order, index) => convertOrderResponse(order, index + 1000)),
+        ready: ready.map((order, index) => convertOrderResponse(order, index + 2000)),
+        completed: completed.map((order, index) => convertOrderResponse(order, index + 3000)),
+        rejected: rejected.map((order, index) => convertOrderResponse(order, index + 4000)),
+      };
+
+      // Créer la liste plate pour compatibility
+      const allOrders = [
+        ...ordersByStatus.pending,
+        ...ordersByStatus.accepted,
+        ...ordersByStatus.ready,
+        ...ordersByStatus.completed,
+        ...ordersByStatus.rejected,
+      ];
+
+      console.log(`📊 Total commandes récupérées: ${allOrders.length}`);
+      
+      set({
+        orders: allOrders,
+        ordersByStatus: ensureOrdersByStatusStructure(ordersByStatus),
+        loading: false,
       });
       
     } catch (error) {
-      console.error('❌ Erreur récupération commandes:', error);
+      console.error('❌ Erreur récupération toutes commandes:', error);
       set({ 
         error: error instanceof Error ? error.message : 'Erreur lors de la récupération des commandes',
         loading: false 
@@ -161,18 +294,48 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     }
   },
 
+  refreshOrdersData: async () => {
+    const { fetchAllOrders } = get();
+    await fetchAllOrders();
+  },
+
+  // === MÉTHODES LEGACY (pour compatibilité) ===
+  
+  fetchPendingOrders: async () => {
+    const { fetchOrdersByStatus } = get();
+    await fetchOrdersByStatus('pending');
+  },
+
+  // === ACTIONS SUR LES COMMANDES ===
+  
   acceptOrder: async (orderId: number) => {
     try {
       console.log('✅ Acceptation commande:', orderId);
       const updatedOrder = await AdminApiService.acceptOrder(orderId);
       
-      set((state) => ({
-        orders: state.orders.map((order) =>
-          order.id === orderId 
-            ? { ...order, status: updatedOrder.status as 'accepted' }
-            : order
-        ),
-      }));
+      set((state) => {
+        // Assurer la structure et obtenir les listes
+        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
+        const pendingOrders = safeOrdersByStatus.pending.filter(order => order.id !== orderId);
+        const orderToMove = safeOrdersByStatus.pending.find(order => order.id === orderId);
+        
+        if (orderToMove) {
+          const updatedOrderLocal = { ...orderToMove, status: 'accepted' as const };
+          
+          return {
+            orders: state.orders.map(order => 
+              order.id === orderId ? updatedOrderLocal : order
+            ),
+            ordersByStatus: {
+              ...safeOrdersByStatus,
+              pending: pendingOrders,
+              accepted: [...safeOrdersByStatus.accepted, updatedOrderLocal],
+            },
+          };
+        }
+        
+        return state;
+      });
       
     } catch (error) {
       console.error('❌ Erreur acceptation commande:', error);
@@ -185,13 +348,29 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       console.log('❌ Refus commande:', orderId);
       const updatedOrder = await AdminApiService.rejectOrder(orderId);
       
-      set((state) => ({
-        orders: state.orders.map((order) =>
-          order.id === orderId 
-            ? { ...order, status: updatedOrder.status as 'rejected' }
-            : order
-        ),
-      }));
+      set((state) => {
+        // Assurer la structure et obtenir les listes
+        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
+        const pendingOrders = safeOrdersByStatus.pending.filter(order => order.id !== orderId);
+        const orderToMove = safeOrdersByStatus.pending.find(order => order.id === orderId);
+        
+        if (orderToMove) {
+          const updatedOrderLocal = { ...orderToMove, status: 'rejected' as const };
+          
+          return {
+            orders: state.orders.map(order => 
+              order.id === orderId ? updatedOrderLocal : order
+            ),
+            ordersByStatus: {
+              ...safeOrdersByStatus,
+              pending: pendingOrders,
+              rejected: [...safeOrdersByStatus.rejected, updatedOrderLocal],
+            },
+          };
+        }
+        
+        return state;
+      });
       
     } catch (error) {
       console.error('❌ Erreur refus commande:', error);
@@ -204,13 +383,29 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       console.log('📦 Commande prête:', orderId);
       const updatedOrder = await AdminApiService.markOrderReady(orderId);
       
-      set((state) => ({
-        orders: state.orders.map((order) =>
-          order.id === orderId 
-            ? { ...order, status: updatedOrder.status as 'ready' }
-            : order
-        ),
-      }));
+      set((state) => {
+        // Assurer la structure et obtenir les listes
+        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
+        const acceptedOrders = safeOrdersByStatus.accepted.filter(order => order.id !== orderId);
+        const orderToMove = safeOrdersByStatus.accepted.find(order => order.id === orderId);
+        
+        if (orderToMove) {
+          const updatedOrderLocal = { ...orderToMove, status: 'ready' as const };
+          
+          return {
+            orders: state.orders.map(order => 
+              order.id === orderId ? updatedOrderLocal : order
+            ),
+            ordersByStatus: {
+              ...safeOrdersByStatus,
+              accepted: acceptedOrders,
+              ready: [...safeOrdersByStatus.ready, updatedOrderLocal],
+            },
+          };
+        }
+        
+        return state;
+      });
       
     } catch (error) {
       console.error('❌ Erreur marquage prêt:', error);
@@ -223,13 +418,29 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
       console.log('🏁 Finalisation commande:', orderId);
       const updatedOrder = await AdminApiService.completeOrder(orderId);
       
-      set((state) => ({
-        orders: state.orders.map((order) =>
-          order.id === orderId 
-            ? { ...order, status: updatedOrder.status as 'completed' }
-            : order
-        ),
-      }));
+      set((state) => {
+        // Assurer la structure et obtenir les listes
+        const safeOrdersByStatus = ensureOrdersByStatusStructure(state.ordersByStatus);
+        const readyOrders = safeOrdersByStatus.ready.filter(order => order.id !== orderId);
+        const orderToMove = safeOrdersByStatus.ready.find(order => order.id === orderId);
+        
+        if (orderToMove) {
+          const updatedOrderLocal = { ...orderToMove, status: 'completed' as const };
+          
+          return {
+            orders: state.orders.map(order => 
+              order.id === orderId ? updatedOrderLocal : order
+            ),
+            ordersByStatus: {
+              ...safeOrdersByStatus,
+              ready: readyOrders,
+              completed: [...safeOrdersByStatus.completed, updatedOrderLocal],
+            },
+          };
+        }
+        
+        return state;
+      });
       
     } catch (error) {
       console.error('❌ Erreur finalisation commande:', error);
@@ -247,13 +458,31 @@ export const useOrderStore = create<OrderStore>((set, get) => ({
     })),
 
   getPendingOrders: () => {
-    const { orders } = get();
-    return orders.filter((order) => order.status === 'pending');
+    const { ordersByStatus } = get();
+    return ordersByStatus.pending;
   },
 
   getOrdersByStatus: (status: string) => {
+    const { ordersByStatus } = get();
+    const safeOrdersByStatus = ensureOrdersByStatusStructure(ordersByStatus);
+    return safeOrdersByStatus[status as keyof typeof safeOrdersByStatus] || [];
+  },
+
+  getAllOrdersFlat: () => {
     const { orders } = get();
-    return orders.filter((order) => order.status === status);
+    return orders;
+  },
+
+  getOrdersStats: () => {
+    const { ordersByStatus } = get();
+    return {
+      pending: ordersByStatus.pending.length,
+      accepted: ordersByStatus.accepted.length,
+      ready: ordersByStatus.ready.length,
+      completed: ordersByStatus.completed.length,
+      rejected: ordersByStatus.rejected.length,
+      total: Object.values(ordersByStatus).flat().length,
+    };
   },
 
   clearError: () => set({ error: null }),
