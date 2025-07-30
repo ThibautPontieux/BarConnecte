@@ -38,6 +38,7 @@ public static class UpdateDrink
         drink.Quantity = request.Data.Quantity;
         drink.Description = request.Data.Description;
         drink.Category = request.Data.Category;
+        drink.Price = request.Data.Price;
 
         await db.SaveChangesAsync();
 
@@ -49,5 +50,5 @@ public static class UpdateDrink
         decimal Quantity,
         string Description,
         DrinkCategory Category,
-        string Price);
+        decimal Price);
 }
