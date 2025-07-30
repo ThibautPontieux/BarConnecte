@@ -3,12 +3,7 @@ import type {
   Drink, 
   CreateDrinkRequest, 
   UpdateDrinkRequest,
-  OrderResponse,
-  StockCheckResult, 
-  EditOrderRequest, 
-  AcceptPartialOrderRequest, 
-  ModifyQuantitiesRequest,
-  OrderEditSuggestions
+  OrderResponse
 } from './types';
 
 export class AdminApiService {
